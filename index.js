@@ -6,20 +6,19 @@ const {
 const { Boom } = require("@hapi/boom");
 const express = require("express");
 
-// --- 1. سيرفر الويب لضمان بقاء البوت مستيقظاً على Render ---
+// --- 1. سيرفر الويب لضمان بقاء البوت يعمل 24/7 على Render ---
 const app = express();
 const port = process.env.PORT || 8000;
-app.get("/", (req, res) => res.status(200).send("🛡️ Sparta Bot is Online and Linked!"));
-app.listen(port, () => console.log(`✅ Web Server Active on port: ${port}`));
+app.get("/", (req, res) => res.status(200).send("🛡️ Sparta Bot is Online!"));
+app.listen(port, () => console.log(`✅ Server running on port: ${port}`));
 
-// --- 2. إعداد تشغيل البوت ---
+// --- 2. تشغيل البوت ---
 async function startSpartaBot() {
-    // سيستخدم المجلد الموجود مسبقاً بما أنك ربطت الرقم فعلاً
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: false, // لا نحتاج QR بما أن الربط تم
+        printQRInTerminal: false, // بما أنك ربطت الرقم سابقاً
         browser: ["Sparta System", "Safari", "3.0.0"]
     });
 
@@ -29,22 +28,25 @@ async function startSpartaBot() {
             const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) startSpartaBot();
         } else if (connection === "open") {
-            console.log("✅ حقق! Comebot متصل الآن برقمك: 4915510974213");
+            console.log("✅ تم الاتصال بنجاح بنظام سبارتا");
         }
     });
 
     sock.ev.on("creds.update", saveCreds);
 
-    // --- 3. الرد التلقائي عند كتابة "بوت" ---
+    // --- 3. معالجة الرسائل للرد على ".بوت" ---
     sock.ev.on("messages.upsert", async (m) => {
         const msg = m.messages[0];
         if (!msg.message || msg.key.fromMe) return;
 
         const remoteJid = msg.key.remoteJid;
-        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase();
+        // استخراج النص من الرسالة
+        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
 
-        if (text === "بوت") {
-            // كارت الاتصال الخاص بك (VCard) برقمك المذكور
+        // الرد إذا كتب الشخص ".بوت" بالضبط
+        if (text === ".بوت") {
+            
+            // تعريف كارت الشخصية (VCard) برقمك
             const vcard = 'BEGIN:VCARD\n'
                 + 'VERSION:3.0\n'
                 + 'FN:Abu Al-Baraa 🛡️\n'
