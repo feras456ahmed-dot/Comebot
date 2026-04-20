@@ -11,34 +11,11 @@ const express = require("express");
 const pino = require("pino");
 const fs = require("fs");
 
-// --- 1. إعداد لوحة المراقبة (Dashboard) ---
+// --- 1. إعداد لوحة المراقبة ---
 const app = express();
-let lastError = "النظام مستقر ويعمل بنجاح 🛡️";
-
+let lastError = "النظام مستقر 🛡️";
 app.get("/", (req, res) => {
-    res.send(`
-        <!DOCTYPE html>
-        <html lang="ar" dir="rtl">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Sparta Dashboard</title>
-            <style>
-                body { background: #0a0a0a; color: #fff; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-                .card { background: #1a1a1a; padding: 25px; border-radius: 15px; border: 1px solid #ff0000; box-shadow: 0 0 25px rgba(255,0,0,0.3); width: 90%; max-width: 500px; text-align: center; }
-                h1 { color: #ff0000; text-shadow: 0 0 10px #ff0000; }
-                .error-box { background: #000; color: #ff4444; padding: 15px; border-radius: 8px; font-family: monospace; text-align: left; overflow-x: auto; border: 1px dashed #444; font-size: 12px; }
-            </style>
-        </head>
-        <body>
-            <div class="card">
-                <h1>🛡️ نظام سبارتا</h1>
-                <div style="color:#0f0; margin-bottom:15px;">الحالة: متصل ✅</div>
-                <div class="error-box">${lastError}</div>
-            </div>
-        </body>
-        </html>
-    `);
+    res.send(`<body style="background:#000;color:#f00;text-align:center;padding-top:50px;font-family:sans-serif;"><h1>🛡️ Sparta Dashboard</h1><p style="color:#0f0;">Status: Online</p><div style="border:1px dashed #444;padding:20px;margin:20px;">${lastError}</div></body>`);
 });
 app.listen(process.env.PORT || 8000);
 
@@ -87,53 +64,42 @@ async function startSpartaBot() {
         const msg = m.messages[0];
         if (!msg.message) return;
 
+        // 🛡️ القاعدة الذهبية: إذا كانت الرسالة "من البوت نفسه" يتجاهلها فوراً (نفي العلة)
+        if (msg.key.fromMe) return;
+
         const remoteJid = msg.key.remoteJid;
-        const sender = msg.key.fromMe ? decodeJid(sock.user.id) : (msg.key.participant || remoteJid);
+        const sender = msg.key.participant || remoteJid;
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
 
-        // 🛡️ الفلتر الصارم: إذا لم تبدأ الرسالة بـ "." سيتم تجاهلها فوراً
-        if (!text.startsWith(".")) return;
-
-        // حماية إضافية: لا يرد على نفسه إذا كان النص يحتوي على شعار البوت (لمنع التكرار)
-        if (msg.key.fromMe && text.includes("🛡️")) return;
-
-        const isDeveloper = sender.includes("967730263509") || sender.includes(decodeJid(sock.user.id));
-        const isElite = data.elite.includes(sender) || isDeveloper;
-
-        const quotedMsg = msg.message.extendedTextMessage?.contextInfo;
-        const stanzaId = quotedMsg?.stanzaId;
-        const quotedSender = quotedMsg?.participant;
-        const mentioned = quotedMsg?.mentionedJid?.[0] || quotedSender;
-
-        // --- الأوامر المتاحة الآن (يجب أن تبدأ بـ .) ---
-        
-        if (isDeveloper && text.startsWith(".أضف نخبة")) {
-            let target = mentioned || text.split(" ")[2] + "@s.whatsapp.net";
-            if (!data.elite.includes(target)) {
-                data.elite.push(target);
+        // --- أمر الانضمام للنخبة بالولاء ---
+        if (text === "ارجوك اضفني للنخبة يا سيدي") {
+            if (!data.elite.includes(sender)) {
+                data.elite.push(sender);
                 saveData();
-                return sock.sendMessage(remoteJid, { text: `🛡️ تمت إضافة @${target.split('@')[0]} للنخبة.`, mentions: [target] });
+                return sock.sendMessage(remoteJid, { text: `🛡️ قُبل ولاؤك. تم منحك صلاحيات النخبة في نظام سبارتا.` }, { quoted: msg });
+            } else {
+                return sock.sendMessage(remoteJid, { text: `🛡️ أنت بالفعل من النخبة يا جندي.` }, { quoted: msg });
             }
         }
 
+        // --- فحص الصلاحيات للأوامر الأخرى ---
+        const isDeveloper = sender.includes("967730263509");
+        const isElite = data.elite.includes(sender) || isDeveloper;
+
+        if (!text.startsWith(".")) return;
+
         if (isElite && remoteJid.endsWith('@g.us')) {
-            if (text === ".ثبت" && stanzaId) {
-                await sock.relayMessage(remoteJid, { pinInChatMsg: { key: { remoteJid, fromMe: false, id: stanzaId, participant: quotedSender }, type: 1, duration: 2592000 } }, {});
+            const quotedMsg = msg.message.extendedTextMessage?.contextInfo;
+            if (text === ".ثبت" && quotedMsg?.stanzaId) {
+                await sock.relayMessage(remoteJid, { pinInChatMsg: { key: { remoteJid, fromMe: false, id: quotedMsg.stanzaId, participant: quotedMsg.participant }, type: 1, duration: 2592000 } }, {});
             }
-            if (text === ".احذف" && stanzaId) {
-                await sock.sendMessage(remoteJid, { delete: { remoteJid, fromMe: false, id: stanzaId, participant: quotedSender } });
-            }
-            if (text.startsWith(".طرد") && mentioned) {
-                await sock.groupParticipantsUpdate(remoteJid, [mentioned], "remove");
+            if (text === ".احذف" && quotedMsg?.stanzaId) {
+                await sock.sendMessage(remoteJid, { delete: { remoteJid, fromMe: false, id: quotedMsg.stanzaId, participant: quotedMsg.participant } });
             }
         }
 
         if (text === ".بوت") {
-            await sock.sendMessage(remoteJid, { text: "🛡️ نظام سبارتا الملكي نشط وجاهز للأوامر." }, { quoted: msg });
-        }
-
-        if (text === ".ايدي") {
-            await sock.sendMessage(remoteJid, { text: `🛡️ معرف المجموعة: ${remoteJid}` }, { quoted: msg });
+            await sock.sendMessage(remoteJid, { text: "🛡️ نظام سبارتا الملكي مستقر وجاهز." }, { quoted: msg });
         }
     });
 }
