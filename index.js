@@ -9,11 +9,19 @@ const { Boom } = require("@hapi/boom");
 const express = require("express");
 const pino = require("pino");
 
-// --- 1. إعداد سيرفر الويب للبقاء متصلاً 24/7 على Render ---
 const app = express();
-const port = process.env.PORT || 8000;
-app.get("/", (req, res) => res.send("🛡️ Sparta Bot System is Live!"));
-app.listen(port, () => console.log(`✅ Web Server running on port: ${port}`));
+app.get("/", (req, res) => res.send("🛡️ Sparta System is Active!"));
+app.listen(process.env.PORT || 8000);
+
+// مخزن مؤقت لبيانات الترقية والإعفاء
+let tempStorage = {};
+
+const ranks = [
+    "الإمبراطور", "نائب الإمبراطور", "الـلورد", "سلطان", "نائب سلطان",
+    "الملك", "نائب الملك", "الدوق", "نائب الدوق", "أدميرال",
+    "نائب أدميرال", "يونكو", "عميد", "تشيبوكاي", "ملازم",
+    "حامل بيرق", "حامل راية", "مشرف متدرب"
+];
 
 async function startSpartaBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
@@ -25,76 +33,103 @@ async function startSpartaBot() {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
         },
-        printQRInTerminal: false, // تعطيل QR لاستخدام كود الربط
+        printQRInTerminal: false,
         logger: pino({ level: "fatal" }),
         browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
-
-    // --- 2. نظام الربط بالرقم (Pairing Code) ---
-    if (!sock.authState.creds.registered) {
-        const phoneNumber = "4915510974213"; // رقمك الألماني المعتمد
-        setTimeout(async () => {
-            let code = await sock.requestPairingCode(phoneNumber);
-            code = code?.match(/.{1,4}/g)?.join("-") || code;
-            console.log(`\n\n============= SPARTA SYSTEM =============\n`);
-            console.log(`🔗 كود الربط الخاص بك هو: ${code}`);
-            console.log(`\n=========================================\n`);
-        }, 3000);
-    }
 
     sock.ev.on("connection.update", (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === "close") {
             const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) startSpartaBot();
-        } else if (connection === "open") {
-            console.log("✅ حقق! البوت متصل الآن بنظام سبارتا.");
         }
     });
 
     sock.ev.on("creds.update", saveCreds);
 
-    // --- 3. معالجة الأوامر ---
     sock.ev.on("messages.upsert", async (m) => {
         const msg = m.messages[0];
         if (!msg.message || msg.key.fromMe) return;
 
         const remoteJid = msg.key.remoteJid;
+        const sender = msg.key.participant || remoteJid;
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
 
-        // أمر الرد بجهة الاتصال
-        if (text === ".بوت" || text === "بوت") {
-            const vcard = 'BEGIN:VCARD\nVERSION:3.0\nFN:Abu Al-Baraa 🛡️\nORG:Sparta System;\nTEL;type=CELL;type=VOICE;waid=4915510974213:+49 15510 974213\nEND:VCARD';
+        // --- نظام التجهيز (في الخاص) ---
+        if (!remoteJid.endsWith('@g.us')) {
             
-            await sock.sendMessage(remoteJid, { 
-                text: "أهلاً بك في نظام سبارتا الملكي 🛡️\nأنا بوت المساعدة الخاص بـ أبو البراء.\n\nيمكنك التواصل مع المطور مباشرة عبر جهة الاتصال أدناه:" 
-            }, { quoted: msg });
-
-            await sock.sendMessage(remoteJid, {
-                contacts: { displayName: 'أبو البراء', contacts: [{ vcard }] }
-            });
-        }
-
-        // أمر الحصول على آيدي واسم الجروب (تطوير سبارتا)
-        if (text === ".ايدي وأسم القروب") {
-            if (!remoteJid.endsWith('@g.us')) {
-                return await sock.sendMessage(remoteJid, { text: "❌ هذا الأمر يعمل داخل المجموعات فقط!" }, { quoted: msg });
+            if (text === ".تجهيز ترقية" || text === ".تجهيز اعفاء") {
+                tempStorage[sender] = { step: 1, type: text.includes("ترقية") ? "promote" : "demote" };
+                return await sock.sendMessage(remoteJid, { text: "🛡️ نظام سبارتا جاهز.\nاكتب لقب الشخص المستهدف:" });
             }
 
-            try {
-                const groupMetadata = await sock.groupMetadata(remoteJid);
-                const groupName = groupMetadata.subject;
-                const groupId = remoteJid;
+            let userStep = tempStorage[sender];
+            if (userStep) {
+                if (userStep.step === 1) {
+                    userStep.name = text;
+                    userStep.step = 2;
+                    return await sock.sendMessage(remoteJid, { text: "✅ تم تسجيل اللقب.\nالآن أرسل رقم الشخص (بالصيغة الدولية مثل +964...):" });
+                }
+                if (userStep.step === 2) {
+                    userStep.targetNumber = text.replace(/\D/g, '') + "@s.whatsapp.net";
+                    userStep.step = 3;
+                    let rankList = ranks.map((r, i) => `${i + 1}. *${r}*`).join("\n");
+                    return await sock.sendMessage(remoteJid, { text: `🛡️ اختر رقم الرتبة:\n\n${rankList}` });
+                }
+                if (userStep.step === 3) {
+                    let rankIndex = parseInt(text) - 1;
+                    if (ranks[rankIndex]) {
+                        userStep.rankNum = parseInt(text);
+                        userStep.rankName = ranks[rankIndex];
+                        userStep.step = 4;
+                        return await sock.sendMessage(remoteJid, { text: "✅ تم اختيار الرتبة.\nالآن اكتب وصف القروب الجديد:" });
+                    }
+                }
+                if (userStep.step === 4) {
+                    userStep.newDesc = text;
+                    userStep.step = 5;
+                    return await sock.sendMessage(remoteJid, { text: `✅ تم التجهيز بنجاح!\n\nاذهب للقروب ومنشن الشخص واكتب:\n${userStep.type === "promote" ? ".رقي" : ".إعفاء"}` });
+                }
+            }
+        }
 
-                await sock.sendMessage(remoteJid, { 
-                    text: `🛡️ ايدي قروب (${groupName}) هو :\n\n${groupId}` 
-                }, { quoted: msg });
-            } catch (err) {
-                console.error(err);
+        // --- نظام التنفيذ (في القروب) ---
+        if (remoteJid.endsWith('@g.us')) {
+            let userStep = tempStorage[sender];
+            
+            if ((text.startsWith(".رقي") || text.startsWith(".إعفاء")) && userStep && userStep.step === 5) {
+                const target = userStep.targetNumber;
+
+                try {
+                    // تغيير الوصف
+                    await sock.groupUpdateDescription(remoteJid, userStep.newDesc);
+
+                    if (userStep.type === "promote") {
+                        // ترقية (مشرف) إذا كانت الرتبة 1-13
+                        if (userStep.rankNum <= 13) {
+                            await sock.groupParticipantsUpdate(remoteJid, [target], "promote");
+                        }
+                        await sock.sendMessage(remoteJid, { 
+                            text: `🛡️ تهانينا @${target.split('@')[0]} !\nتمت ترقيتك لرتبة: *${userStep.rankName}*\n\nالوصف الجديد للقلعة تم تحديثه.`,
+                            mentions: [target]
+                        });
+                    } else {
+                        // إعفاء (سحب إشراف)
+                        await sock.groupParticipantsUpdate(remoteJid, [target], "demote");
+                        await sock.sendMessage(remoteJid, { 
+                            text: `🛡️ تم إعفاء @${target.split('@')[0]} من مهامه.\nالرتبة السابقة: *${userStep.rankName}*`,
+                            mentions: [target]
+                        });
+                    }
+                    delete tempStorage[sender]; // مسح البيانات بعد التنفيذ
+                } catch (e) {
+                    await sock.sendMessage(remoteJid, { text: "❌ فشل التنفيذ. تأكد أن البوت مشرف!" });
+                }
             }
         }
     });
 }
 
-// تشغيل النظام
 startSpartaBot();
+
